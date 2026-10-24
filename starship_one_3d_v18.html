@@ -1,0 +1,185 @@
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Starship One – V1.8</title><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#030910;color:#e2f5ee;font:14px system-ui}canvas{display:block;touch-action:none}#hud{position:absolute;left:16px;top:14px;pointer-events:none;text-shadow:0 2px 8px black}#hud strong{letter-spacing:.16em;font-size:19px}#hud small{display:block;margin-top:5px;color:#a8c6bc}#help{position:absolute;bottom:15px;text-align:center;width:100%;pointer-events:none;color:#b8d5ce}#roominfo{position:absolute;right:12px;top:14px;background:#09231ecc;border:1px solid #4c9c82;border-radius:12px;padding:10px 12px;display:none;max-width:175px}#roominfo b{display:block;margin-bottom:4px}#err{position:absolute;top:75px;left:16px;right:16px;color:#ffc6a8;white-space:pre-wrap}</style></head><body><div id="hud"><strong>STARSHIP ONE</strong><small>V1.8 · DECK-STEUERUNG REPARIERT</small></div><div id="help">Mit einem Finger drehen · Mit zwei Fingern zoomen</div><div id="roominfo"></div><div id="err"></div><script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.1/examples/jsm/"}}</script><script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+try{
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x030910);
+const camera=new THREE.PerspectiveCamera(42,innerWidth/innerHeight,.1,400);camera.position.set(24,17,-32);
+const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);renderer.outputColorSpace=THREE.SRGBColorSpace;document.body.appendChild(renderer.domElement);
+const orbit=new OrbitControls(camera,renderer.domElement);orbit.enableDamping=true;orbit.minDistance=7;orbit.maxDistance=85;orbit.target.set(0,0,0);
+let deckMode=false;
+function setDeckMode(active){
+ if(deckMode===active)return;
+ deckMode=active;
+ orbit.enableRotate=!active;
+ orbit.enablePan=active;
+ orbit.screenSpacePanning=active;
+ orbit.mouseButtons.LEFT=active?THREE.MOUSE.PAN:THREE.MOUSE.ROTATE;
+ orbit.touches.ONE=active?THREE.TOUCH.PAN:THREE.TOUCH.ROTATE;
+ orbit.touches.TWO=THREE.TOUCH.DOLLY_PAN;
+ orbit.enableDamping=!active;
+ if(active){
+   const dist=camera.position.distanceTo(orbit.target);
+   camera.up.set(0,0,-1);
+   camera.position.copy(orbit.target).add(new THREE.Vector3(0,dist,.001));
+   camera.lookAt(orbit.target);
+   orbit.update();
+ }else{
+   camera.up.set(0,1,0);
+   camera.lookAt(orbit.target);
+   orbit.update();
+ }
+}
+scene.add(new THREE.HemisphereLight(0x9bd6c7,0x07121c,2.5));
+const key=new THREE.DirectionalLight(0xf3fff9,3.2);key.position.set(-10,18,-13);scene.add(key);
+const rim=new THREE.DirectionalLight(0x4bd9b4,2.0);rim.position.set(12,-6,16);scene.add(rim);
+const hullMat=new THREE.MeshStandardMaterial({color:0x648a7e,metalness:.72,roughness:.32,side:THREE.DoubleSide,transparent:true,opacity:1,depthWrite:true});
+const darkMat=new THREE.MeshStandardMaterial({color:0x163c38,metalness:.8,roughness:.3,transparent:true});
+const glowMat=new THREE.MeshStandardMaterial({color:0x4affb3,emissive:0x11e68e,emissiveIntensity:2.5,transparent:true});
+const ship=new THREE.Group();scene.add(ship);
+// A closed organic hull made as ONE continuous surface, not separate polygon plates.
+// Outline is defined on the right, from the nose toward the stern, then mirrored.
+const right=[
+[0,-15],[1.15,-14.5],[2.2,-13.0],[3.05,-10.5],[3.35,-7.5],
+[3.55,-4.0],[4.6,-1.0],[6.2,1.6],[8.8,3.5],[11.9,3.9],
+[14.3,2.5],[16.2,-.3],[17.2,-3.6],[17.7,-7.6],
+[17.0,-10.5],[15.6,-12.2],[14.8,-11.2],[15.0,-7.8],
+[14.4,-4.1],[12.9,-1.0],[10.6,2.0],[8.2,5.2],
+[5.5,8.7],[2.9,11.8],[0,13.2]
+];
+// A smooth closed spline is sampled at high resolution. The rear is broad,
+// the bow tapers and the wings sweep sideways and forward.
+const outline=[...right,...right.slice(1,-1).reverse().map(([x,z])=>[-x,z])];
+const spline=new THREE.CatmullRomCurve3(outline.map(([x,z])=>new THREE.Vector3(x,0,z)),true,'centripetal');
+const N=360,R=24,vertices=[],indices=[];
+for(let side=0;side<2;side++){
+ for(let ring=0;ring<=R;ring++){
+  const f=ring/R;
+  for(let i=0;i<N;i++){
+   const q=spline.getPoint(i/N);
+   const x=q.x*f,z=q.z*f;
+   // Thick rounded stern, a low oval bridge, and smoothly tapering wing edges.
+   const aft=2.65*Math.exp(-Math.pow((z-6.7)/8.2,2))*Math.exp(-Math.pow(x/11.8,2));
+   const bridge=.85*Math.exp(-Math.pow((z+7.8)/4.7,2))*Math.exp(-Math.pow(x/3.2,2));
+   const wing=.75*Math.exp(-Math.pow((Math.abs(x)-11)/7.8,2));
+   const round=Math.sqrt(Math.max(0,1-f*f));
+   const y=(side===0?1:-1)*(0.12+1.1*round+aft+bridge+wing*.6);
+   vertices.push(x,y,z);
+  }
+ }
+}
+const stride=(R+1)*N;
+for(let side=0;side<2;side++)for(let ring=0;ring<R;ring++)for(let i=0;i<N;i++){
+ const a=side*stride+ring*N+i,b=side*stride+ring*N+(i+1)%N,c=a+N,d=b+N;
+ if(side===0)indices.push(a,b,c,b,d,c);else indices.push(a,c,b,b,c,d);
+}
+for(let i=0;i<N;i++){
+ const j=(i+1)%N,a=R*N+i,b=R*N+j,c=stride+R*N+i,d=stride+R*N+j;
+ indices.push(a,c,b,b,c,d);
+}
+const geom=new THREE.BufferGeometry();geom.setAttribute('position',new THREE.Float32BufferAttribute(vertices,3));geom.setIndex(indices);geom.computeVertexNormals();
+ship.add(new THREE.Mesh(geom,hullMat));
+function ell(x,y,z,sx,sy,sz,mat){const m=new THREE.Mesh(new THREE.SphereGeometry(1,48,24),mat);m.position.set(x,y,z);m.scale.set(sx,sy,sz);ship.add(m)}
+// Low egg-shaped bridge blended visually into the raised central upper hull.
+ell(0,1.32,-7.7,2.2,.34,3.4,darkMat);
+ell(0,1.61,-8.6,1.1,.09,1.5,glowMat);
+function trace(coords,rad,mat){const path=new THREE.CatmullRomCurve3(coords.map(p=>new THREE.Vector3(...p)));ship.add(new THREE.Mesh(new THREE.TubeGeometry(path,100,rad,7,false),mat))}
+for(const s of [-1,1]){
+ trace([[s*3.8,2.0,7],[s*7.4,1.5,4.2],[s*11.6,1.2,2.3],[s*15.4,.65,-3],[s*16.3,.35,-8.4]],.065,glowMat);
+}
+ell(0,.25,12.9,1.7,.28,.18,glowMat);
+
+// Interior: single 3D deck with open ceilings for a top-down strategy view.
+const deck=new THREE.Group();ship.add(deck);deck.visible=false;
+const floorMat=new THREE.MeshStandardMaterial({color:0x19372f,metalness:.3,roughness:.65});
+const wallMat=new THREE.MeshStandardMaterial({color:0x38695b,metalness:.55,roughness:.4});
+const consoleMat=new THREE.MeshStandardMaterial({color:0x0d2624,metalness:.6,roughness:.3});
+const trimMat=new THREE.MeshStandardMaterial({color:0x28dba0,emissive:0x13895d,emissiveIntensity:1.2});
+const rooms=[];
+function block(group,x,y,z,w,h,d,mat){
+ const mesh=new THREE.Mesh(new THREE.BoxGeometry(w,h,d),mat);
+ mesh.position.set(x,y,z);group.add(mesh);return mesh;
+}
+function room(name,x,z,w,d){
+ const group=new THREE.Group();group.position.set(x,0,z);deck.add(group);
+ const floor=block(group,0,.05,0,w,.14,d,floorMat);
+ // Four walls, with an entrance gap on the stern-facing side.
+ const height=1.15,t=.18;
+ block(group,-w/2,.63,0,t,height,d,wallMat);
+ block(group,w/2,.63,0,t,height,d,wallMat);
+ block(group,0,.63,-d/2,w,height,t,wallMat);
+ block(group,-w*.31,.63,d/2,w*.38,height,t,wallMat);
+ block(group,w*.31,.63,d/2,w*.38,height,t,wallMat);
+ const outline=new THREE.LineSegments(new THREE.EdgesGeometry(new THREE.BoxGeometry(w,.05,d)),
+ new THREE.LineBasicMaterial({color:0x36c79b}));
+ outline.position.y=.15;group.add(outline);
+ floor.userData.room=name;
+ rooms.push({name,x,z,group,floor});
+ return group;
+}
+const bridgeRoom=room('Brücke',0,-8.1,5.6,5.5);
+const med=room('Medizin',-4.5,-1.3,4.1,4.4);
+const lab=room('Forschung',4.5,-1.3,4.1,4.4);
+const q1=room('Quartiere',-5.2,4.2,4.5,4.1);
+const q2=room('Versorgung',5.2,4.2,4.5,4.1);
+const engine=room('Maschinenraum',0,8.6,7.5,6.3);
+const corridor=block(deck,0,-.04,.3,1.5,.11,15,floorMat);
+for(let z=-5;z<7;z+=2.2)block(deck,0,.06,z,1.1,.03,.15,trimMat);
+function addConsole(group,x,z,w=1.2){
+ block(group,x,.38,z,w,.52,.52,consoleMat);
+ block(group,x,.68,z,w*.85,.07,.34,trimMat);
+}
+addConsole(bridgeRoom,-1.5,-1.35);addConsole(bridgeRoom,1.5,-1.35);
+addConsole(bridgeRoom,-1.9,.5,.8);addConsole(bridgeRoom,1.9,.5,.8);
+block(bridgeRoom,0,.5,.4,.85,.85,.85,consoleMat);
+block(bridgeRoom,0,1.0,.05,.7,.17,.38,trimMat);
+block(bridgeRoom,0,.8,-2.55,3.3,1.2,.15,consoleMat);
+block(bridgeRoom,0,.8,-2.42,2.6,.85,.08,trimMat);
+for(const g of [med,lab,q1,q2]){
+ addConsole(g,-.9,-.8);addConsole(g,.9,-.8);
+ block(g,0,.27,1.0,1.4,.3,.7,consoleMat);
+}
+for(let i=-2;i<=2;i++)block(engine,i*1.1,.6,-.8,.72,1.05,1.6,consoleMat);
+const core=new THREE.Mesh(new THREE.CylinderGeometry(.7,.7,2.2,24),trimMat);
+core.position.set(0,1.25,1.2);engine.add(core);
+const raycaster=new THREE.Raycaster(),pointer=new THREE.Vector2();
+let down=null,selected=null,interior=false;
+const info=document.getElementById('roominfo'),help=document.getElementById('help');
+renderer.domElement.addEventListener('pointerdown',e=>{down={x:e.clientX,y:e.clientY}});
+renderer.domElement.addEventListener('pointerup',e=>{
+ if(!interior||!down||Math.hypot(e.clientX-down.x,e.clientY-down.y)>12)return;
+ pointer.set(e.clientX/innerWidth*2-1,-e.clientY/innerHeight*2+1);
+ raycaster.setFromCamera(pointer,camera);
+ const hits=raycaster.intersectObjects(rooms.map(r=>r.floor),false);
+ if(hits.length){
+  selected=rooms.find(r=>r.name===hits[0].object.userData.room);
+  info.style.display='block';info.innerHTML='<b>'+selected.name+'</b><span>3D-Raum ausgewählt</span>';
+  orbit.target.set(selected.x,0,selected.z);
+  camera.up.set(0,0,-1);
+  camera.position.set(selected.x,13,selected.z+.001);
+  camera.lookAt(orbit.target);
+  orbit.update();
+ }
+});
+
+const starGeo=new THREE.BufferGeometry(),stars=[];for(let i=0;i<1000;i++){const r=90+Math.random()*140,az=Math.random()*Math.PI*2,v=Math.random()*2-1,rad=Math.sqrt(1-v*v);stars.push(r*rad*Math.cos(az),r*v,r*rad*Math.sin(az))}starGeo.setAttribute('position',new THREE.Float32BufferAttribute(stars,3));scene.add(new THREE.Points(starGeo,new THREE.PointsMaterial({color:0xb3d8d1,size:.6,sizeAttenuation:false})));
+function loop(){
+ requestAnimationFrame(loop);orbit.update();
+ const distance=camera.position.distanceTo(orbit.target);
+ const above=(camera.position.y-orbit.target.y)/Math.max(distance,.001);
+ const shouldShow=deckMode ? distance<38 : distance<30&&above>.58;
+ const desired=shouldShow?.07:1;
+ hullMat.opacity+=(desired-hullMat.opacity)*.1;
+ darkMat.opacity=glowMat.opacity=hullMat.opacity;
+ hullMat.depthWrite=hullMat.opacity>.92;
+ deck.visible=hullMat.opacity<.9;
+ if(shouldShow!==interior){
+  interior=shouldShow;
+  setDeckMode(interior);
+  if(!interior){info.style.display='none';selected=null}
+  help.textContent=interior?'Deckansicht · Mit einem Finger verschieben · Zwei Finger zoomen · Raum antippen':'Mit einem Finger drehen · Mit zwei Fingern zoomen · Von oben hineinzoomen für Decks';
+ }
+ renderer.render(scene,camera);
+}loop();
+addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+}catch(e){document.getElementById('err').textContent='3D-Fehler: '+e.message;console.error(e)}
+</script></body></html>
