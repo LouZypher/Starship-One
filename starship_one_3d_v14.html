@@ -1,0 +1,90 @@
+<!doctype html><html lang="de"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1"><title>Starship One – Warbird V1.4</title><style>html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#030b10;color:#cdebdc;font:14px system-ui}canvas{display:block;touch-action:none}header{position:absolute;top:16px;left:18px;pointer-events:none;text-shadow:0 2px 10px #000}header strong{font-size:20px;letter-spacing:.17em}header small{display:block;margin-top:7px;opacity:.7}footer{position:absolute;bottom:16px;width:100%;text-align:center;pointer-events:none;opacity:.7}</style></head><body><header><strong>STARSHIP ONE</strong><small>V1.1 · EINTEILIGES HECK</small></header><footer>Mit einem Finger drehen · Mit zwei Fingern zoomen</footer><script type="importmap">{"imports":{"three":"https://cdn.jsdelivr.net/npm/three@0.160.1/build/three.module.js","three/addons/":"https://cdn.jsdelivr.net/npm/three@0.160.1/examples/jsm/"}}</script><script type="module">
+import * as THREE from 'three';
+import {OrbitControls} from 'three/addons/controls/OrbitControls.js';
+const scene=new THREE.Scene();scene.background=new THREE.Color(0x030b10);
+const camera=new THREE.PerspectiveCamera(43,innerWidth/innerHeight,.1,700);camera.position.set(28,19,-33);
+const renderer=new THREE.WebGLRenderer({antialias:true});renderer.setPixelRatio(Math.min(devicePixelRatio,2));renderer.setSize(innerWidth,innerHeight);renderer.outputColorSpace=THREE.SRGBColorSpace;renderer.toneMapping=THREE.ACESFilmicToneMapping;renderer.toneMappingExposure=1.35;document.body.appendChild(renderer.domElement);
+const controls=new OrbitControls(camera,renderer.domElement);controls.enableDamping=true;controls.minDistance=17;controls.maxDistance=95;controls.target.set(0,0,0);
+scene.add(new THREE.HemisphereLight(0x8bbfb2,0x0a171b,2.4));
+const a=new THREE.DirectionalLight(0xe8ffef,3.5);a.position.set(-14,25,-15);scene.add(a);
+const b=new THREE.DirectionalLight(0x21e5ac,2.2);b.position.set(15,-9,18);scene.add(b);
+const metal=new THREE.MeshStandardMaterial({color:0x45695f,metalness:.72,roughness:.31,side:THREE.DoubleSide});
+const dark=new THREE.MeshStandardMaterial({color:0x16332f,metalness:.78,roughness:.33,side:THREE.DoubleSide});
+const ridge=new THREE.MeshStandardMaterial({color:0x77998a,metalness:.8,roughness:.24,side:THREE.DoubleSide});
+const light=new THREE.MeshStandardMaterial({color:0x5affbc,emissive:0x00df87,emissiveIntensity:3.2});
+const ship=new THREE.Group();scene.add(ship);
+// Each wing is a single, smoothly varying loft surface with a rounded outer edge.
+// Both upper and lower wing decks are part of a recognizable D'deridex-inspired double-hull design.
+// Z negative = bow, positive = stern.
+// The entire aft fuselage and BOTH wings are a SINGLE continuous solid mesh.
+// No overlapping wing panels, wing roots, aft ellipsoids or glued-on pods.
+// A unified outline flows from the stern outward into long swept-forward tips.
+const right=[
+ [0,15.4],[2.7,15.25],[5.9,14.35],[9.3,12.2],
+ [12.5,8.9],[15.2,4.4],[17.2,-1.1],[18.9,-7.7],
+ [19.9,-13.8], // forward-pointing sickle tip
+ [18.4,-11.0],[16.6,-6.7],[14.5,-2.0],
+ [11.5,3.2],[8.1,7.1],[5.1,8.1],
+ [3.3,6.7],[2.5,3.0],[2.0,-1.5],
+ [1.3,-6.8],[0,-10.7]
+];
+const perimeter=[...right,...right.slice(1,-1).reverse().map(([x,z])=>[-x,z])];
+// Build ONE indexed, smooth-shaded hull instead of extruding a flat triangulated cap.
+// Every surface point is evaluated on a curved height field. Shared vertices yield
+// continuous normals and avoid the visible triangle faceting of the old version.
+const path=new THREE.CatmullRomCurve3(perimeter.map(([x,z])=>new THREE.Vector3(x,z,0)),true,'centripetal');
+const contour=path.getSpacedPoints(260).slice(0,-1).map(p=>new THREE.Vector2(p.x,p.y));
+// Constrained outline triangulation, then iterative triangle refinement.
+const tris=THREE.ShapeUtils.triangulateShape(contour,[]);
+let xy=contour.map(p=>[p.x,p.y]);let faces=tris.map(f=>f.slice());
+for(let level=0;level<3;level++){
+ const cache=new Map(),next=[];
+ function mid(a,b){const key=Math.min(a,b)+','+Math.max(a,b);if(cache.has(key))return cache.get(key);const i=xy.length;xy.push([(xy[a][0]+xy[b][0])/2,(xy[a][1]+xy[b][1])/2]);cache.set(key,i);return i}
+ for(const [a,b,c] of faces){let ab=mid(a,b),bc=mid(b,c),ca=mid(c,a);next.push([a,ab,ca],[ab,b,bc],[ca,bc,c],[ab,bc,ca])}faces=next;
+}
+function profile(x,z){
+ // Broad, high and rounded stern; wings naturally taper down and forward.
+ const aft=Math.exp(-Math.pow(x/9.5,2)-Math.pow((z-8.5)/8.8,2));
+ const center=Math.exp(-Math.pow(x/3.5,2)-Math.pow((z+5.0)/8.2,2));
+ const wing=Math.max(0,Math.min(1,(Math.abs(x)-5)/14));
+ const drop=1.15*wing*wing*(3-2*wing);
+ return {middle:1.25*aft-.55*drop,thick: .25+2.65*aft+.45*center+.48*(1-wing)};
+}
+const verts=[],idx=[];
+for(const sign of [1,-1]){
+ const base=verts.length/3;
+ for(const [x,z] of xy){const h=profile(x,z);verts.push(x,h.middle+sign*h.thick,z)}
+ for(const [a,b,c] of faces){if(sign===1)idx.push(base+a,base+b,base+c);else idx.push(base+c,base+b,base+a)}
+}
+// Smooth, rounded hull rim using multiple curved profile bands.
+const N=contour.length,baseTop=0,baseBottom=xy.length;
+const ringStarts=[];
+for(let k=1;k<9;k++){
+ const angle=Math.PI*k/9;
+ const ringStart=verts.length/3;ringStarts.push(ringStart);
+ for(const p of contour){const h=profile(p.x,p.y);const inset=.20*Math.sin(angle);const x=p.x*(1-inset/20),z=p.y*(1-inset/20);verts.push(x,h.middle+Math.cos(angle)*h.thick,z)}
+}
+const rings=[baseTop,...ringStarts,baseBottom];
+for(let r=0;r<rings.length-1;r++)for(let i=0;i<N;i++){
+ const j=(i+1)%N,a=rings[r]+i,b=rings[r]+j,c=rings[r+1]+i,d=rings[r+1]+j;
+ idx.push(a,b,c,b,d,c);
+}
+const solid=new THREE.BufferGeometry();solid.setAttribute('position',new THREE.Float32BufferAttribute(verts,3));solid.setIndex(idx);solid.computeVertexNormals();
+const rearHull=new THREE.Mesh(solid,metal);ship.add(rearHull);
+// Low oval command bridge, broadening behind its tapered forward nose.
+// It is a shallow surface detail; the primary hull remains a single connected mesh.
+function ell(x,y,z,sx,sy,sz,mat){const mesh=new THREE.Mesh(new THREE.SphereGeometry(1,64,40),mat);mesh.position.set(x,y,z);mesh.scale.set(sx,sy,sz);ship.add(mesh);return mesh}
+ell(0,1.2,-7.3,2.05,.46,4.2,metal);
+ell(0,1.57,-9.1,1.25,.15,2.0,dark);
+function tube(points,r,mat){const curve=new THREE.CatmullRomCurve3(points.map(p=>new THREE.Vector3(...p)));const mesh=new THREE.Mesh(new THREE.TubeGeometry(curve,120,r,10,false),mat);ship.add(mesh)}
+// Thin illuminated surface inlays; they are not structural wing pieces.
+function tube(points,r,mat){const curve=new THREE.CatmullRomCurve3(points.map(p=>new THREE.Vector3(...p)));const mesh=new THREE.Mesh(new THREE.TubeGeometry(curve,80,r,8,false),mat);ship.add(mesh)}
+for(const side of [-1,1]){
+ tube([[side*4.9,4.2,13.0],[side*9.7,3.1,10.5],[side*14.3,1.7,4.1],[side*17.6,.3,-4.5],[side*19.0,-.3,-11.7]],.065,light);
+}
+// Nose bridge and rear luminous engine line
+
+ell(0,3.6,12.4,1.7,.17,.16,light);
+const stars=new THREE.BufferGeometry(),positions=[];for(let i=0;i<1800;i++){let r=100+Math.random()*220,a=Math.random()*Math.PI*2,z=Math.random()*2-1,v=Math.sqrt(1-z*z);positions.push(r*v*Math.cos(a),r*z,r*v*Math.sin(a))}stars.setAttribute('position',new THREE.Float32BufferAttribute(positions,3));scene.add(new THREE.Points(stars,new THREE.PointsMaterial({color:0xa3c4c4,size:.45,sizeAttenuation:false})));
+function animate(){requestAnimationFrame(animate);controls.update();renderer.render(scene,camera)}animate();addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight)});
+</script></body></html>
